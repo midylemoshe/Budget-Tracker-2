@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#0F1B2B" />
 <title>Budget Tracker</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -10,6 +12,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
   * { box-sizing: border-box; }
+  html { background: #0F1B2B; color-scheme: dark; }
   body { margin: 0; background: #0F1B2B; color: #EDEAE0; font-family: 'Inter', sans-serif; }
   .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
   .disp { font-family: 'Fraunces', serif; }
@@ -131,13 +134,15 @@ function BudgetTracker() {
   const [cursor, setCursor] = useState(new Date());
   const [form, setForm] = useState({ type: "expense", amount: "", category: "Groceries", desc: "", date: new Date().toISOString().slice(0, 10) });
   const [error, setError] = useState("");
-  const [projection, setProjection] = useState({ contribution: "", rate: "2", years: "5" });
   const [savingsBalance, setSavingsBalance] = useState(() => loadLocal("bt_savings", 0));
   const [savingsInput, setSavingsInput] = useState("");
-  const [chartUnit, setChartUnit] = useState("auto");
+  const [goals, setGoals] = useState(() => loadLocal("bt_goals", []));
+  const [goalInputs, setGoalInputs] = useState({});
+  const [newGoal, setNewGoal] = useState({ name: "", target: "" });
 
   useEffect(() => { saveLocal("bt_transactions", transactions); }, [transactions]);
   useEffect(() => { saveLocal("bt_savings", savingsBalance); }, [savingsBalance]);
+  useEffect(() => { saveLocal("bt_goals", goals); }, [goals]);
 
   const key = monthKey(cursor);
   const monthTx = useMemo(
@@ -164,25 +169,6 @@ function BudgetTracker() {
     });
   }, [monthTx]);
 
-  const effectiveContribution = projection.contribution !== "" ? parseFloat(projection.contribution) || 0 : Math.max(net, 0);
-  const effectiveRate = parseFloat(projection.rate) || 0;
-  const effectiveYears = parseInt(projection.years, 10) || 1;
-  const resolvedUnit = chartUnit === "auto" ? (effectiveYears <= 1 ? "months" : "quarters") : chartUnit;
-  const intervalMonths = resolvedUnit === "months" ? 1 : resolvedUnit === "years" ? 12 : 3;
-
-  const projectionData = useMemo(() => {
-    const monthlyRate = effectiveRate / 100 / 12;
-    const months = effectiveYears * 12;
-    let balance = 0, contributed = 0;
-    const points = [{ label: 0, value: 0 }];
-    for (let m = 1; m <= months; m++) {
-      balance = balance * (1 + monthlyRate) + effectiveContribution;
-      contributed += effectiveContribution;
-      if (m % intervalMonths === 0 || m === months) points.push({ label: m, value: Math.round(balance) });
-    }
-    return { points, finalBalance: balance, contributed, interestEarned: balance - contributed };
-  }, [effectiveContribution, effectiveRate, effectiveYears, intervalMonths]);
-
   function addTransaction() {
     const amt = parseFloat(form.amount);
     if (!amt || amt <= 0) { setError("Enter an amount greater than zero."); return; }
@@ -197,6 +183,20 @@ function BudgetTracker() {
     if (!amt || amt <= 0) return;
     setSavingsBalance((prev) => Math.max(0, prev + sign * amt));
     setSavingsInput("");
+  }
+
+  function addGoal() {
+    const target = parseFloat(newGoal.target);
+    if (!newGoal.name.trim() || !target || target <= 0) return;
+    setGoals((prev) => [...prev, { id: crypto.randomUUID(), name: newGoal.name.trim(), target, saved: 0 }]);
+    setNewGoal({ name: "", target: "" });
+  }
+  function removeGoal(id) { setGoals((prev) => prev.filter((g) => g.id !== id)); }
+  function adjustGoal(id, sign) {
+    const amt = parseFloat(goalInputs[id]);
+    if (!amt || amt <= 0) return;
+    setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, saved: Math.max(0, g.saved + sign * amt) } : g)));
+    setGoalInputs((prev) => ({ ...prev, [id]: "" }));
   }
 
   const maxCat = byCategory.length ? byCategory[0][1] : 1;
@@ -330,46 +330,50 @@ function BudgetTracker() {
       </div>
 
       <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: 18, marginTop: 28 }}>
-        <SectionTitle>Savings projection</SectionTitle>
-        <div style={{ fontSize: 11, color: "#9BA8BE", marginTop: -8, marginBottom: 12 }}>
-          Chart resolution: {resolvedUnit}{chartUnit === "auto" ? " (auto)" : ""}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
-          <label style={labelStyle}>
-            Monthly contribution
-            <input type="number" placeholder={fmt(Math.max(net, 0))} value={projection.contribution} onChange={(e) => setProjection((p) => ({ ...p, contribution: e.target.value }))} style={{ ...inputStyle, width: "100%", marginTop: 4 }} min="0" step="1" />
-          </label>
-          <label style={labelStyle}>
-            Interest rate (APY %)
-            <input type="number" value={projection.rate} onChange={(e) => setProjection((p) => ({ ...p, rate: e.target.value }))} style={{ ...inputStyle, width: "100%", marginTop: 4 }} min="0" step="0.1" />
-          </label>
-          <label style={labelStyle}>
-            Time horizon
-            <span className="num" style={{ color: "#EDEAE0", fontSize: 13, marginTop: 4 }}>{effectiveYears} {effectiveYears === 1 ? "year" : "years"}</span>
-            <input type="range" min="1" max="30" step="1" value={projection.years} onChange={(e) => setProjection((p) => ({ ...p, years: e.target.value }))} style={{ marginTop: 8, accentColor: "#C9A227", width: "100%" }} />
-          </label>
-        </div>
-
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 8 }}>
-          {["auto", "months", "years"].map((u) => (
-            <button key={u} onClick={() => setChartUnit(u)} style={{ background: chartUnit === u ? "#C9A227" : "transparent", color: chartUnit === u ? "#0F1B2B" : "#9BA8BE", border: "1px solid #2A3B56", borderRadius: 6, padding: "4px 10px", fontSize: 11, textTransform: "capitalize", cursor: "pointer" }}>
-              {u}
-            </button>
-          ))}
-        </div>
-        <AreaSpark
-          points={projectionData.points}
-          color="#5AA679"
-          tickFormatter={(m) => (resolvedUnit === "years" ? `${Math.round(m / 12)}y` : resolvedUnit === "quarters" ? `Q${Math.ceil(m / 3)}` : `${m}m`)}
-        />
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 14, marginTop: 16 }}>
-          <div><div style={miniLabel}>Projected balance</div><div className="num" style={{ fontSize: 18, fontWeight: 600, color: "#C9A227" }}>{fmt(projectionData.finalBalance)}</div></div>
-          <div><div style={miniLabel}>Total contributed</div><div className="num" style={{ fontSize: 18, fontWeight: 600, color: "#EDEAE0" }}>{fmt(projectionData.contributed)}</div></div>
-          <div><div style={miniLabel}>Interest earned</div><div className="num" style={{ fontSize: 18, fontWeight: 600, color: "#5AA679" }}>{fmt(projectionData.interestEarned)}</div></div>
-        </div>
-        <div style={{ fontSize: 12, color: "#9BA8BE", marginTop: 12 }}>
-          Leave the monthly contribution blank to use this month's net balance ({fmt(Math.max(net, 0))}). Rate compounds monthly — check your bank's AER/APY for the figure to enter.
+        <SectionTitle>Savings goals</SectionTitle>
+        {goals.length === 0 ? (
+          <div style={{ color: "#9BA8BE", fontSize: 14, padding: "16px 0", textAlign: "center", border: "1px dashed #2A3B56", borderRadius: 10, marginBottom: 18 }}>
+            No goals yet — add something you're saving up for below.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 18 }}>
+            {goals.map((g) => {
+              const pct = g.target > 0 ? Math.min(100, Math.round((g.saved / g.target) * 100)) : 0;
+              const remaining = Math.max(0, g.target - g.saved);
+              return (
+                <div key={g.id} style={{ border: "1px solid #2A3B56", borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>{g.name}</div>
+                      <div className="num" style={{ fontSize: 12, color: "#9BA8BE", marginTop: 2 }}>{fmt(g.saved)} of {fmt(g.target)} saved</div>
+                    </div>
+                    <button onClick={() => removeGoal(g.id)} aria-label="Delete goal" style={delBtn}><Icon name="trash" size={14} /></button>
+                  </div>
+                  <div style={{ height: 8, background: "#1E2F4A", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: pct >= 100 ? "#5AA679" : "#C9A227", borderRadius: 4 }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <span className="num" style={{ fontSize: 12, color: pct >= 100 ? "#5AA679" : "#9BA8BE" }}>
+                      {pct >= 100 ? "Goal reached! \uD83C\uDF89" : `${fmt(remaining)} to go (${pct}%)`}
+                    </span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input type="number" placeholder="Amount" value={goalInputs[g.id] || ""} onChange={(e) => setGoalInputs((prev) => ({ ...prev, [g.id]: e.target.value }))} style={{ ...inputStyle, width: 90 }} min="0" step="0.01" />
+                      <button onClick={() => adjustGoal(g.id, 1)} style={{ ...addBtn, padding: "6px 10px" }}><Icon name="plus" size={14} /></button>
+                      <button onClick={() => adjustGoal(g.id, -1)} style={{ ...withdrawBtn, padding: "6px 10px" }}>Withdraw</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ borderTop: "1px solid #2A3B56", paddingTop: 16 }}>
+          <div style={{ fontSize: 13, color: "#9BA8BE", marginBottom: 10 }}>Add a new goal</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            <input type="text" placeholder="What are you saving for?" value={newGoal.name} onChange={(e) => setNewGoal((g) => ({ ...g, name: e.target.value }))} style={inputStyle} />
+            <input type="number" placeholder="Target amount" value={newGoal.target} onChange={(e) => setNewGoal((g) => ({ ...g, target: e.target.value }))} style={inputStyle} min="0" step="1" />
+            <button onClick={addGoal} style={addBtn}><Icon name="plus" size={16} /> Add goal</button>
+          </div>
         </div>
       </div>
 
