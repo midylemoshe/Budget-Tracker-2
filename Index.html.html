@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="dark" />
+<meta name="theme-color" content="#0F1B2B" />
+<title>Budget Tracker</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; }
+  html { background: #0F1B2B; color-scheme: dark; }
+  body { margin: 0; background: #0F1B2B; color: #EDEAE0; font-family: 'Inter', sans-serif; }
+  .num { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  .disp { font-family: 'Fraunces', serif; }
+  input, select { font-family: 'Inter', sans-serif; }
+  ::selection { background: #C9A227; color: #0F1B2B; }
+  .row-hover:hover { background: #1E2F4A; }
+  input:focus, select:focus, button:focus-visible { outline: 2px solid #C9A227; outline-offset: 1px; }
+  button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+const CATEGORIES = {
+  income: ["Salary", "Freelance", "Gift", "Interest", "Other Income"],
+  expense: ["Housing", "Groceries", "Transport", "Utilities", "Dining", "Health", "Leisure", "Other"],
+};
+
+const CAT_COLOR = {
+  Housing: "#C9A227", Groceries: "#5AA679", Transport: "#7C93B8", Utilities: "#B87FD1",
+  Dining: "#C1543C", Health: "#4FB3B0", Leisure: "#D9A85C", Other: "#8B93A6",
+};
+
+const fmt = (n) => (n || 0).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 2 });
+const monthKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+const monthLabel = (d) => d.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+
+function loadLocal(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw !== null ? JSON.parse(raw) : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+function saveLocal(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error("Could not save to this browser's storage", e);
+  }
+}
+
+// --- lightweight icon set (no external icon library needed) ---
+function Icon({ name, size = 16, color = "currentColor" }) {
+  const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
+  switch (name) {
+    case "plus": return <svg {...common}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>;
+    case "trash": return <svg {...common}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></svg>;
+    case "left": return <svg {...common}><polyline points="15 18 9 12 15 6" /></svg>;
+    case "right": return <svg {...common}><polyline points="9 18 15 12 9 6" /></svg>;
+    case "up": return <svg {...common}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /></svg>;
+    case "down": return <svg {...common}><polyline points="23 18 13.5 8.5 8.5 13.5 1 6" /></svg>;
+    case "wallet": return <svg {...common}><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" /><path d="M3 5v14a2 2 0 0 0 2 2h16v-5" /><path d="M18 12a2 2 0 0 0 0 4h4v-4Z" /></svg>;
+    default: return null;
+  }
+}
+
+// --- minimal SVG area chart (no chart library dependency) ---
+function AreaSpark({ points, color = "#C9A227", height = 110, tickFormatter, showTicks = true }) {
+  if (!points || points.length < 2) return <div style={{ height, display: "flex", alignItems: "center", color: "#9BA8BE", fontSize: 13 }}>Not enough data yet</div>;
+  const width = 600;
+  const padTop = 10, padBottom = showTicks ? 22 : 6, padX = 4;
+  const vals = points.map((p) => p.value);
+  const max = Math.max(...vals, 1);
+  const min = Math.min(...vals, 0);
+  const range = max - min || 1;
+  const innerW = width - padX * 2;
+  const innerH = height - padTop - padBottom;
+  const xAt = (i) => padX + (i / (points.length - 1)) * innerW;
+  const yAt = (v) => padTop + innerH - ((v - min) / range) * innerH;
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(p.value).toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L ${xAt(points.length - 1).toFixed(1)} ${(padTop + innerH).toFixed(1)} L ${xAt(0).toFixed(1)} ${(padTop + innerH).toFixed(1)} Z`;
+  const gradId = `grad-${color.replace("#", "")}`;
+  const maxLabels = 8;
+  const step = Math.max(1, Math.ceil(points.length / maxLabels));
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={areaPath} fill={`url(#${gradId})`} stroke="none" />
+      <path d={linePath} fill="none" stroke={color} strokeWidth="2" />
+      {showTicks && points.map((p, i) => (i % step === 0 || i === points.length - 1) ? (
+        <text key={i} x={xAt(i)} y={height - 4} fontSize="10" fill="#9BA8BE" textAnchor="middle">
+          {tickFormatter ? tickFormatter(p.label) : p.label}
+        </text>
+      ) : null)}
+    </svg>
+  );
+}
+
+function Donut({ income, expense, size = 120 }) {
+  const total = income + expense;
+  const r = 42, stroke = 16, c = 2 * Math.PI * r;
+  const incomeFrac = total > 0 ? income / total : 0;
+  const gap = income > 0 && expense > 0 ? 3 : 0;
+  const incomeDash = Math.max(0, incomeFrac * c - gap);
+  const expenseDash = Math.max(0, (1 - incomeFrac) * c - gap);
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100">
+      <g transform="rotate(-90 50 50)">
+        <circle cx="50" cy="50" r={r} fill="none" stroke="#1E2F4A" strokeWidth={stroke} />
+        {total > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#5AA679" strokeWidth={stroke} strokeDasharray={`${incomeDash} ${c}`} strokeLinecap="round" />}
+        {total > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#C1543C" strokeWidth={stroke} strokeDasharray={`${expenseDash} ${c}`} strokeDashoffset={-(incomeFrac * c + gap)} strokeLinecap="round" />}
+      </g>
+    </svg>
+  );
+}
+
+function BudgetTracker() {
+  const [transactions, setTransactions] = useState(() => loadLocal("bt_transactions", []));
+  const [cursor, setCursor] = useState(new Date());
+  const [form, setForm] = useState({ type: "expense", amount: "", category: "Groceries", desc: "", date: new Date().toISOString().slice(0, 10) });
+  const [error, setError] = useState("");
+  const [savingsBalance, setSavingsBalance] = useState(() => loadLocal("bt_savings", 0));
+  const [savingsInput, setSavingsInput] = useState("");
+  const [goals, setGoals] = useState(() => loadLocal("bt_goals", []));
+  const [goalInputs, setGoalInputs] = useState({});
+  const [newGoal, setNewGoal] = useState({ name: "", target: "" });
+
+  useEffect(() => { saveLocal("bt_transactions", transactions); }, [transactions]);
+  useEffect(() => { saveLocal("bt_savings", savingsBalance); }, [savingsBalance]);
+  useEffect(() => { saveLocal("bt_goals", goals); }, [goals]);
+
+  const key = monthKey(cursor);
+  const monthTx = useMemo(
+    () => transactions.filter((t) => t.date.slice(0, 7) === key).sort((a, b) => a.date.localeCompare(b.date)),
+    [transactions, key]
+  );
+
+  const income = monthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+  const expense = monthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+  const net = income - expense;
+  const savingsRate = income > 0 ? Math.round((net / income) * 100) : 0;
+
+  const byCategory = useMemo(() => {
+    const map = {};
+    monthTx.filter((t) => t.type === "expense").forEach((t) => { map[t.category] = (map[t.category] || 0) + t.amount; });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  }, [monthTx]);
+
+  const runningBalance = useMemo(() => {
+    let bal = 0;
+    return monthTx.map((t) => {
+      bal += t.type === "income" ? t.amount : -t.amount;
+      return { label: t.date.slice(8, 10), value: bal };
+    });
+  }, [monthTx]);
+
+  function addTransaction() {
+    const amt = parseFloat(form.amount);
+    if (!amt || amt <= 0) { setError("Enter an amount greater than zero."); return; }
+    setError("");
+    setTransactions((prev) => [...prev, { id: crypto.randomUUID(), type: form.type, amount: amt, category: form.category, desc: form.desc.trim(), date: form.date }]);
+    setForm((f) => ({ ...f, amount: "", desc: "" }));
+  }
+  function removeTransaction(id) { setTransactions((prev) => prev.filter((t) => t.id !== id)); }
+  function changeMonth(delta) { setCursor((c) => new Date(c.getFullYear(), c.getMonth() + delta, 1)); }
+  function adjustSavings(sign) {
+    const amt = parseFloat(savingsInput);
+    if (!amt || amt <= 0) return;
+    setSavingsBalance((prev) => Math.max(0, prev + sign * amt));
+    setSavingsInput("");
+  }
+
+  function addGoal() {
+    const target = parseFloat(newGoal.target);
+    if (!newGoal.name.trim() || !target || target <= 0) return;
+    setGoals((prev) => [...prev, { id: crypto.randomUUID(), name: newGoal.name.trim(), target, saved: 0 }]);
+    setNewGoal({ name: "", target: "" });
+  }
+  function removeGoal(id) { setGoals((prev) => prev.filter((g) => g.id !== id)); }
+  function adjustGoal(id, sign) {
+    const amt = parseFloat(goalInputs[id]);
+    if (!amt || amt <= 0) return;
+    setGoals((prev) => prev.map((g) => (g.id === id ? { ...g, saved: Math.max(0, g.saved + sign * amt) } : g)));
+    setGoalInputs((prev) => ({ ...prev, [id]: "" }));
+  }
+
+  const maxCat = byCategory.length ? byCategory[0][1] : 1;
+
+  return (
+    <div style={{ maxWidth: 880, margin: "0 auto", padding: "32px 20px 80px" }}>
+      <div style={{ borderBottom: "1px solid #2A3B56", paddingBottom: 20, marginBottom: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Icon name="wallet" size={22} color="#C9A227" />
+            <h1 className="disp" style={{ fontSize: 26, fontWeight: 600, letterSpacing: "0.01em", margin: 0 }}>Budget Tracker</h1>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <button onClick={() => changeMonth(-1)} aria-label="Previous month" style={navBtn}><Icon name="left" /></button>
+            <span className="num" style={{ fontSize: 15, color: "#9BA8BE", minWidth: 150, textAlign: "center" }}>{monthLabel(cursor)}</span>
+            <button onClick={() => changeMonth(1)} aria-label="Next month" style={navBtn}><Icon name="right" /></button>
+          </div>
+        </div>
+      </div>
+
+      {(income > 0 || expense > 0) && (
+        <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: "16px 18px", marginBottom: 20, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          <div style={{ width: 120, height: 120, flexShrink: 0 }}><Donut income={income} expense={expense} /></div>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <div style={{ fontSize: 12, color: "#9BA8BE", marginBottom: 10, letterSpacing: "0.04em", textTransform: "uppercase" }}>Income vs expenses</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#5AA679" }} />
+              <span style={{ fontSize: 13, flex: 1 }}>Income</span>
+              <span className="num" style={{ fontSize: 13, color: "#5AA679" }}>{income + expense > 0 ? Math.round((income / (income + expense)) * 100) : 0}%</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#C1543C" }} />
+              <span style={{ fontSize: 13, flex: 1 }}>Expenses</span>
+              <span className="num" style={{ fontSize: 13, color: "#C1543C" }}>{income + expense > 0 ? Math.round((expense / (income + expense)) * 100) : 0}%</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginBottom: 28 }}>
+        <SummaryCard label="Income" value={fmt(income)} icon={<Icon name="up" size={16} color="#5AA679" />} tone="#5AA679" />
+        <SummaryCard label="Expenses" value={fmt(expense)} icon={<Icon name="down" size={16} color="#C1543C" />} tone="#C1543C" />
+        <SummaryCard label="Net Balance" value={fmt(net)} icon={<Icon name="wallet" size={16} color="#C9A227" />} tone={net >= 0 ? "#C9A227" : "#C1543C"} />
+        <SummaryCard label="Savings Rate" value={`${savingsRate}%`} tone="#7C93B8" />
+      </div>
+
+      {runningBalance.length > 1 && (
+        <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: "16px 18px", marginBottom: 28 }}>
+          <div style={{ fontSize: 12, color: "#9BA8BE", marginBottom: 8, letterSpacing: "0.04em", textTransform: "uppercase" }}>Balance through the month</div>
+          <AreaSpark points={runningBalance} color="#C9A227" tickFormatter={(d) => `${d}`} />
+        </div>
+      )}
+
+      {byCategory.length > 0 && (
+        <div style={{ marginBottom: 28 }}>
+          <SectionTitle>Spending by category</SectionTitle>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {byCategory.map(([cat, amt]) => (
+              <div key={cat} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ width: 90, fontSize: 13, color: "#EDEAE0", flexShrink: 0 }}>{cat}</span>
+                <div style={{ flex: 1, height: 8, background: "#1E2F4A", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ width: `${(amt / maxCat) * 100}%`, height: "100%", background: CAT_COLOR[cat] || "#8B93A6", borderRadius: 4 }} />
+                </div>
+                <span className="num" style={{ width: 80, textAlign: "right", fontSize: 13, color: "#9BA8BE" }}>{fmt(amt)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: 18, marginBottom: 28 }}>
+        <SectionTitle>Add an entry</SectionTitle>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 10 }}>
+          <select value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value, category: CATEGORIES[e.target.value][0] }))} style={inputStyle}>
+            <option value="expense">Expense</option>
+            <option value="income">Income</option>
+          </select>
+          <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} style={inputStyle}>
+            {CATEGORIES[form.type].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input type="number" placeholder="Amount" value={form.amount} onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} style={inputStyle} min="0" step="0.01" />
+          <input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} style={inputStyle} />
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input type="text" placeholder="Description (optional)" value={form.desc} onChange={(e) => setForm((f) => ({ ...f, desc: e.target.value }))} style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={addTransaction} style={addBtn}><Icon name="plus" size={16} /> Add</button>
+        </div>
+        {error && <div style={{ color: "#C1543C", fontSize: 13, marginTop: 8 }}>{error}</div>}
+      </div>
+
+      <div>
+        <SectionTitle>{monthLabel(cursor)} entries</SectionTitle>
+        {monthTx.length === 0 ? (
+          <div style={{ color: "#9BA8BE", fontSize: 14, padding: "24px 0", textAlign: "center", border: "1px dashed #2A3B56", borderRadius: 10 }}>
+            No entries yet this month. Add your first one above.
+          </div>
+        ) : (
+          <div style={{ border: "1px solid #2A3B56", borderRadius: 10, overflow: "hidden" }}>
+            {monthTx.slice().reverse().map((t) => (
+              <div key={t.id} className="row-hover" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderBottom: "1px solid #2A3B56" }}>
+                <span className="num" style={{ fontSize: 12, color: "#9BA8BE", width: 44 }}>{t.date.slice(8, 10)}/{t.date.slice(5, 7)}</span>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: t.type === "income" ? "#5AA679" : (CAT_COLOR[t.category] || "#8B93A6"), flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 14 }}>{t.desc || t.category}</span>
+                <span style={{ fontSize: 12, color: "#9BA8BE" }}>{t.category}</span>
+                <span className="num" style={{ fontSize: 14, color: t.type === "income" ? "#5AA679" : "#C1543C", minWidth: 90, textAlign: "right" }}>
+                  {t.type === "income" ? "+" : "\u2212"}{fmt(t.amount)}
+                </span>
+                <button onClick={() => removeTransaction(t.id)} aria-label="Delete entry" style={delBtn}><Icon name="trash" size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: 18, marginTop: 28 }}>
+        <SectionTitle>Savings balance</SectionTitle>
+        <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <div style={miniLabel}>Total saved</div>
+            <div className="num" style={{ fontSize: 30, fontWeight: 600, color: "#C9A227" }}>{fmt(savingsBalance)}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="number" placeholder="Amount" value={savingsInput} onChange={(e) => setSavingsInput(e.target.value)} style={{ ...inputStyle, width: 120 }} min="0" step="0.01" />
+            <button onClick={() => adjustSavings(1)} style={addBtn}><Icon name="plus" size={16} /> Deposit</button>
+            <button onClick={() => adjustSavings(-1)} style={withdrawBtn}>Withdraw</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: "#9BA8BE", marginTop: 12 }}>
+          This is a running total across all months — deposit what you set aside, or withdraw if you dip into it.
+        </div>
+      </div>
+
+      <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: 18, marginTop: 28 }}>
+        <SectionTitle>Savings goals</SectionTitle>
+        {goals.length === 0 ? (
+          <div style={{ color: "#9BA8BE", fontSize: 14, padding: "16px 0", textAlign: "center", border: "1px dashed #2A3B56", borderRadius: 10, marginBottom: 18 }}>
+            No goals yet — add something you're saving up for below.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 18 }}>
+            {goals.map((g) => {
+              const pct = g.target > 0 ? Math.min(100, Math.round((g.saved / g.target) * 100)) : 0;
+              const remaining = Math.max(0, g.target - g.saved);
+              return (
+                <div key={g.id} style={{ border: "1px solid #2A3B56", borderRadius: 10, padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 600 }}>{g.name}</div>
+                      <div className="num" style={{ fontSize: 12, color: "#9BA8BE", marginTop: 2 }}>{fmt(g.saved)} of {fmt(g.target)} saved</div>
+                    </div>
+                    <button onClick={() => removeGoal(g.id)} aria-label="Delete goal" style={delBtn}><Icon name="trash" size={14} /></button>
+                  </div>
+                  <div style={{ height: 8, background: "#1E2F4A", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+                    <div style={{ width: `${pct}%`, height: "100%", background: pct >= 100 ? "#5AA679" : "#C9A227", borderRadius: 4 }} />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <span className="num" style={{ fontSize: 12, color: pct >= 100 ? "#5AA679" : "#9BA8BE" }}>
+                      {pct >= 100 ? "Goal reached! \uD83C\uDF89" : `${fmt(remaining)} to go (${pct}%)`}
+                    </span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input type="number" placeholder="Amount" value={goalInputs[g.id] || ""} onChange={(e) => setGoalInputs((prev) => ({ ...prev, [g.id]: e.target.value }))} style={{ ...inputStyle, width: 90 }} min="0" step="0.01" />
+                      <button onClick={() => adjustGoal(g.id, 1)} style={{ ...addBtn, padding: "6px 10px" }}><Icon name="plus" size={14} /></button>
+                      <button onClick={() => adjustGoal(g.id, -1)} style={{ ...withdrawBtn, padding: "6px 10px" }}>Withdraw</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ borderTop: "1px solid #2A3B56", paddingTop: 16 }}>
+          <div style={{ fontSize: 13, color: "#9BA8BE", marginBottom: 10 }}>Add a new goal</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            <input type="text" placeholder="What are you saving for?" value={newGoal.name} onChange={(e) => setNewGoal((g) => ({ ...g, name: e.target.value }))} style={inputStyle} />
+            <input type="number" placeholder="Target amount" value={newGoal.target} onChange={(e) => setNewGoal((g) => ({ ...g, target: e.target.value }))} style={inputStyle} min="0" step="1" />
+            <button onClick={addGoal} style={addBtn}><Icon name="plus" size={16} /> Add goal</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#5A6B85", marginTop: 24, textAlign: "center" }}>
+        Data is saved locally in this browser only — it isn't synced or sent anywhere.
+      </div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, icon, tone }) {
+  return (
+    <div style={{ background: "#17263D", border: "1px solid #2A3B56", borderRadius: 10, padding: "14px 16px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#9BA8BE", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>{icon}{label}</div>
+      <div className="num" style={{ fontSize: 20, fontWeight: 600, color: tone }}>{value}</div>
+    </div>
+  );
+}
+function SectionTitle({ children }) {
+  return <div className="disp" style={{ fontSize: 15, fontWeight: 600, color: "#EDEAE0", marginBottom: 14 }}>{children}</div>;
+}
+
+const navBtn = { background: "#17263D", border: "1px solid #2A3B56", borderRadius: 6, color: "#EDEAE0", width: 30, height: 30, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" };
+const inputStyle = { background: "#0F1B2B", border: "1px solid #2A3B56", borderRadius: 6, color: "#EDEAE0", padding: "8px 10px", fontSize: 13 };
+const addBtn = { background: "#C9A227", border: "none", borderRadius: 6, color: "#0F1B2B", padding: "8px 16px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" };
+const withdrawBtn = { background: "transparent", border: "1px solid #C1543C", borderRadius: 6, color: "#C1543C", padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" };
+const delBtn = { background: "transparent", border: "none", color: "#9BA8BE", cursor: "pointer", padding: 6, display: "flex" };
+const labelStyle = { fontSize: 12, color: "#9BA8BE", display: "flex", flexDirection: "column" };
+const miniLabel = { fontSize: 11, color: "#9BA8BE", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 };
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<BudgetTracker />);
+</script>
+</body>
+</html>
